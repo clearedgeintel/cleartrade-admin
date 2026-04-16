@@ -91,6 +91,12 @@ export default async function TenantDetailPage({
           </div>
           <div className="flex items-center gap-2">
             <Link
+              href={`/dashboard/${tenant.id}/settings`}
+              className="rounded-md border border-border px-4 py-2 text-sm font-medium hover:bg-muted"
+            >
+              Settings
+            </Link>
+            <Link
               href={`/dashboard/${tenant.id}/billing`}
               className="rounded-md border border-border px-4 py-2 text-sm font-medium hover:bg-muted"
             >
