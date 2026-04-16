@@ -51,7 +51,7 @@ export default function LandingPage() {
             Start free trial
           </Link>
           <Link
-            href="#pricing"
+            href="/pricing"
             className="rounded-md border border-border px-6 py-3 font-medium hover:bg-muted"
           >
             See pricing
