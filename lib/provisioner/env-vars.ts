@@ -1,5 +1,6 @@
 import { randomBytes } from 'crypto';
-import type { Tenant, TenantSecrets } from '@/db/schema';
+import type { Tenant } from '@/db/schema';
+import type { PlainTenantSecrets } from '@/lib/tenant-secrets';
 import { PLANS } from '@/lib/plans';
 
 // Preset watchlists. The bot reads WATCHLIST as a comma-separated string.
@@ -26,7 +27,7 @@ export function buildBotEnvVars({
   apiKey,
 }: {
   tenant: Tenant;
-  secrets: TenantSecrets;
+  secrets: PlainTenantSecrets;
   databaseUrl: string;
   apiKey: string;
 }): Record<string, string> {

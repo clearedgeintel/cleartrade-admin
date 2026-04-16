@@ -2,13 +2,9 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { eq } from 'drizzle-orm';
 import { db } from '@/db';
-import {
-  subscriptions,
-  tenantInfra,
-  tenantSecrets,
-  tenants,
-} from '@/db/schema';
+import { subscriptions, tenantInfra, tenants } from '@/db/schema';
 import { PLANS } from '@/lib/plans';
+import { getTenantSecrets, maskSecret } from '@/lib/tenant-secrets';
 
 export default async function AdminTenantDetailPage({
   params,
@@ -23,17 +19,13 @@ export default async function AdminTenantDetailPage({
 
   if (!tenantRow) notFound();
 
-  const [infra, secrets, subs] = await Promise.all([
+  const [infra, secretsRow, subs] = await Promise.all([
     db
       .select()
       .from(tenantInfra)
       .where(eq(tenantInfra.tenantId, params.id))
       .limit(1),
-    db
-      .select()
-      .from(tenantSecrets)
-      .where(eq(tenantSecrets.tenantId, params.id))
-      .limit(1),
+    getTenantSecrets(params.id),
     db
       .select()
       .from(subscriptions)
@@ -43,7 +35,6 @@ export default async function AdminTenantDetailPage({
 
   const tenant = tenantRow;
   const infraRow = infra[0];
-  const secretsRow = secrets[0];
   const subRow = subs[0];
   const plan = PLANS[tenant.plan];
 
@@ -141,13 +132,13 @@ export default async function AdminTenantDetailPage({
         <Card title="Credentials (masked)">
           <KV
             k="Alpaca API key"
-            v={secretsRow?.alpacaApiKey ? mask(secretsRow.alpacaApiKey) : '—'}
+            v={secretsRow?.alpacaApiKey ? maskSecret(secretsRow.alpacaApiKey) : '—'}
           />
           <KV
             k="Alpaca secret"
             v={
               secretsRow?.alpacaApiSecret
-                ? mask(secretsRow.alpacaApiSecret)
+                ? maskSecret(secretsRow.alpacaApiSecret)
                 : '—'
             }
           />
@@ -156,13 +147,13 @@ export default async function AdminTenantDetailPage({
             k="Anthropic key"
             v={
               secretsRow?.anthropicApiKey
-                ? mask(secretsRow.anthropicApiKey)
+                ? maskSecret(secretsRow.anthropicApiKey)
                 : '(using shared)'
             }
           />
           <KV
             k="Bot API_KEY (x-api-key)"
-            v={infraRow?.botApiKey ? mask(infraRow.botApiKey) : '—'}
+            v={infraRow?.botApiKey ? maskSecret(infraRow.botApiKey) : '—'}
           />
         </Card>
 
@@ -220,11 +211,6 @@ function KV({ k, v }: { k: string; v: string }) {
       </dd>
     </div>
   );
-}
-
-function mask(s: string): string {
-  if (s.length <= 8) return '••••';
-  return `${s.slice(0, 4)}…${s.slice(-4)}`;
 }
 
 function redactUrl(url: string): string {

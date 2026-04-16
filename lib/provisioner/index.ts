@@ -1,7 +1,8 @@
 import { eq } from 'drizzle-orm';
 import { db } from '@/db';
-import { tenantInfra, tenantSecrets, tenants } from '@/db/schema';
+import { tenantInfra, tenants } from '@/db/schema';
 import type { Tenant } from '@/db/schema';
+import { getTenantSecrets } from '@/lib/tenant-secrets';
 import { buildBotEnvVars, generateBotApiKey } from './env-vars';
 import { createSupabaseProject } from './supabase';
 import { addCustomDomain, createBotService } from './railway';
@@ -27,11 +28,7 @@ export async function provisionTenant(tenantId: string): Promise<void> {
     .limit(1);
   if (!tenant) throw new Error(`tenant ${tenantId} not found`);
 
-  const [secrets] = await db
-    .select()
-    .from(tenantSecrets)
-    .where(eq(tenantSecrets.tenantId, tenantId))
-    .limit(1);
+  const secrets = await getTenantSecrets(tenantId);
   if (!secrets) {
     throw new Error(
       `tenant ${tenantId} has no secrets — onboarding incomplete`

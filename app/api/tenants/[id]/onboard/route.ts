@@ -2,8 +2,9 @@ import { NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { and, eq } from 'drizzle-orm';
 import { db } from '@/db';
-import { tenants, tenantSecrets } from '@/db/schema';
+import { tenants } from '@/db/schema';
 import { PLANS } from '@/lib/plans';
+import { upsertTenantSecrets } from '@/lib/tenant-secrets';
 
 interface OnboardBody {
   alpacaApiKey: string;
@@ -51,22 +52,13 @@ export async function POST(
 
   const baseUrl = body.useLive ? LIVE_URL : PAPER_URL;
 
-  await db
-    .insert(tenantSecrets)
-    .values({
-      tenantId: tenant.id,
-      alpacaApiKey: body.alpacaApiKey,
-      alpacaApiSecret: body.alpacaApiSecret,
-      alpacaBaseUrl: baseUrl,
-    })
-    .onConflictDoUpdate({
-      target: tenantSecrets.tenantId,
-      set: {
-        alpacaApiKey: body.alpacaApiKey,
-        alpacaApiSecret: body.alpacaApiSecret,
-        alpacaBaseUrl: baseUrl,
-      },
-    });
+  await upsertTenantSecrets(tenant.id, {
+    alpacaApiKey: body.alpacaApiKey,
+    alpacaApiSecret: body.alpacaApiSecret,
+    alpacaBaseUrl: baseUrl,
+    anthropicApiKey: null,
+    polygonApiKey: null,
+  });
 
   await db
     .update(tenants)
