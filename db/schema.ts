@@ -36,6 +36,20 @@ export const healthStatus = pgEnum('health_status', [
   'unknown',
 ]);
 
+export const watchlistPreset = pgEnum('watchlist_preset', [
+  'top8',
+  'crypto',
+  'custom',
+]);
+
+export const riskTolerance = pgEnum('risk_tolerance', [
+  'conservative',
+  'moderate',
+  'aggressive',
+]);
+
+export const agencyMode = pgEnum('agency_mode', ['rules', 'hybrid', 'ai']);
+
 // ─── Tenants ──────────────────────────────────────────────────────────────
 // One row per customer bot instance. slug drives the subdomain.
 export const tenants = pgTable('tenants', {
@@ -45,6 +59,15 @@ export const tenants = pgTable('tenants', {
   ownerId: text('owner_id').notNull(), // Clerk user ID
   status: tenantStatus('status').notNull().default('pending'),
   plan: planTier('plan').notNull().default('starter'),
+  // Onboarding wizard captures these; the Railway provisioner reads them
+  // to build the bot's env vars. Null until onboarding completes.
+  watchlistPreset: watchlistPreset('watchlist_preset'),
+  customSymbols: text('custom_symbols').array(),
+  riskTolerance: riskTolerance('risk_tolerance'),
+  agencyMode: agencyMode('agency_mode'),
+  onboardingCompletedAt: timestamp('onboarding_completed_at', {
+    withTimezone: true,
+  }),
   createdAt: timestamp('created_at', { withTimezone: true })
     .notNull()
     .defaultNow(),

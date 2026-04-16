@@ -1,0 +1,119 @@
+import { NextResponse } from 'next/server';
+import { auth } from '@clerk/nextjs/server';
+import { and, eq } from 'drizzle-orm';
+import { db } from '@/db';
+import { tenants, tenantSecrets } from '@/db/schema';
+import { PLANS } from '@/lib/plans';
+
+interface OnboardBody {
+  alpacaApiKey: string;
+  alpacaApiSecret: string;
+  useLive: boolean;
+  watchlistPreset: 'top8' | 'crypto' | 'custom';
+  customSymbols?: string[];
+  riskTolerance: 'conservative' | 'moderate' | 'aggressive';
+  agencyMode: 'rules' | 'hybrid' | 'ai';
+}
+
+const PAPER_URL = 'https://paper-api.alpaca.markets';
+const LIVE_URL = 'https://api.alpaca.markets';
+
+export async function POST(
+  req: Request,
+  { params }: { params: { id: string } }
+) {
+  const { userId } = await auth();
+  if (!userId) {
+    return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  }
+
+  const [tenant] = await db
+    .select()
+    .from(tenants)
+    .where(and(eq(tenants.id, params.id), eq(tenants.ownerId, userId)))
+    .limit(1);
+
+  if (!tenant) {
+    return NextResponse.json({ error: 'not found' }, { status: 404 });
+  }
+
+  if (tenant.status !== 'pending') {
+    return NextResponse.json(
+      { error: `tenant is ${tenant.status}, onboarding already complete` },
+      { status: 409 }
+    );
+  }
+
+  const body = (await req.json()) as OnboardBody;
+
+  const err = validate(body, tenant.plan);
+  if (err) return NextResponse.json({ error: err }, { status: 400 });
+
+  const baseUrl = body.useLive ? LIVE_URL : PAPER_URL;
+
+  await db
+    .insert(tenantSecrets)
+    .values({
+      tenantId: tenant.id,
+      alpacaApiKey: body.alpacaApiKey,
+      alpacaApiSecret: body.alpacaApiSecret,
+      alpacaBaseUrl: baseUrl,
+    })
+    .onConflictDoUpdate({
+      target: tenantSecrets.tenantId,
+      set: {
+        alpacaApiKey: body.alpacaApiKey,
+        alpacaApiSecret: body.alpacaApiSecret,
+        alpacaBaseUrl: baseUrl,
+      },
+    });
+
+  await db
+    .update(tenants)
+    .set({
+      watchlistPreset: body.watchlistPreset,
+      customSymbols:
+        body.watchlistPreset === 'custom' ? body.customSymbols ?? [] : null,
+      riskTolerance: body.riskTolerance,
+      agencyMode: body.agencyMode,
+      onboardingCompletedAt: new Date(),
+      // Advance the state machine — the Railway worker (next commit) picks
+      // this up. Only flip if subscription is already paid; otherwise stay
+      // 'pending' until invoice.paid fires.
+      status: 'provisioning',
+      updatedAt: new Date(),
+    })
+    .where(eq(tenants.id, tenant.id));
+
+  return NextResponse.json({ ok: true, tenantId: tenant.id });
+}
+
+function validate(body: OnboardBody, plan: keyof typeof PLANS): string | null {
+  if (!body.alpacaApiKey?.trim() || !body.alpacaApiSecret?.trim()) {
+    return 'alpaca key and secret required';
+  }
+  if (body.useLive && !PLANS[plan].liveTradingAllowed) {
+    return `live trading is not available on the ${plan} plan`;
+  }
+  if (body.agencyMode === 'ai' && plan === 'starter') {
+    return 'full AI agency is not available on the starter plan';
+  }
+  if (
+    body.watchlistPreset === 'custom' &&
+    (!body.customSymbols || body.customSymbols.length === 0)
+  ) {
+    return 'at least one custom symbol required';
+  }
+  if (body.watchlistPreset === 'custom' && body.customSymbols) {
+    const max = PLANS[plan].maxScanSymbols;
+    if (body.customSymbols.length > max) {
+      return `custom watchlist exceeds ${plan} plan limit of ${max} symbols`;
+    }
+    for (const s of body.customSymbols) {
+      if (!/^[A-Z0-9.\/]{1,12}$/.test(s)) {
+        return `invalid symbol: ${s}`;
+      }
+    }
+  }
+  return null;
+}
