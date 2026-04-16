@@ -89,16 +89,24 @@ export default async function TenantDetailPage({
               )}
             </p>
           </div>
-          {infra?.subdomain && tenant.status === 'active' && (
-            <a
-              href={`https://${infra.subdomain}`}
-              target="_blank"
-              rel="noreferrer"
+          <div className="flex items-center gap-2">
+            <Link
+              href={`/dashboard/${tenant.id}/billing`}
               className="rounded-md border border-border px-4 py-2 text-sm font-medium hover:bg-muted"
             >
-              Open bot UI ↗
-            </a>
-          )}
+              Billing
+            </Link>
+            {infra?.subdomain && tenant.status === 'active' && (
+              <a
+                href={`https://${infra.subdomain}`}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-md border border-border px-4 py-2 text-sm font-medium hover:bg-muted"
+              >
+                Open bot UI ↗
+              </a>
+            )}
+          </div>
         </div>
 
         {needsOnboarding && (
