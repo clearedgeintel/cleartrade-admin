@@ -36,6 +36,25 @@ middleware.ts     Clerk auth gate for /dashboard, /onboarding, /admin, /api/tena
 drizzle.config.ts Drizzle Kit config
 ```
 
+## Supabase MCP (Claude Code)
+
+This repo ships a project-scoped [`.mcp.json`](./.mcp.json) that registers the
+official [Supabase MCP server](https://github.com/supabase-community/supabase-mcp)
+with Claude Code so the agent can introspect the admin database directly.
+
+The config is read-only and pulls credentials from your shell — nothing
+sensitive is checked in. Set these in your user environment (Windows:
+`setx`, or a `~/.claude.json` user-scope override):
+
+```
+SUPABASE_ACCESS_TOKEN=<your personal access token from supabase.com/dashboard/account/tokens>
+SUPABASE_PROJECT_REF=<the project ref from the Supabase project URL>
+```
+
+Restart Claude Code after setting them. Run `/mcp` inside Claude Code to
+confirm the `supabase` server connects. Drop `--read-only` in `.mcp.json`
+only when you deliberately want the agent to mutate the DB.
+
 ## Scripts
 
 | Script              | Purpose                                   |
