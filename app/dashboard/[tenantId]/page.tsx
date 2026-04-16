@@ -7,6 +7,7 @@ import { tenantInfra, tenants } from '@/db/schema';
 import { PLANS } from '@/lib/plans';
 import { fetchFromBot, resolveBotTarget } from '@/lib/bot-proxy';
 import { ProvisionButton } from './provision-button';
+import { LifecycleButtons } from './lifecycle-buttons';
 
 interface BotHealth {
   status: 'healthy' | 'degraded' | 'unhealthy';
@@ -158,6 +159,17 @@ export default async function TenantDetailPage({
         {liveError && (
           <div className="mt-8 rounded-md border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-700">
             Can&apos;t reach bot: {liveError}
+          </div>
+        )}
+
+        {(tenant.status === 'active' || tenant.status === 'paused') && (
+          <div className="mt-8 rounded-lg border border-border p-6">
+            <h2 className="text-lg font-semibold">Lifecycle</h2>
+            <p className="mb-4 mt-1 text-sm text-muted-foreground">
+              Pause to stop the bot without losing its state. Cancel to
+              destroy the bot, its database, and its subscription.
+            </p>
+            <LifecycleButtons tenantId={tenant.id} status={tenant.status} />
           </div>
         )}
 

@@ -63,3 +63,30 @@ export async function createSupabaseProject(input: {
 
   return { databaseUrl, projectRef: project.ref };
 }
+
+/**
+ * Parses the project ref out of a Supabase pooler URL the shape we emit:
+ *   postgresql://postgres.{REF}:...@aws-1-{region}.pooler.supabase.com:5432/postgres
+ */
+export function parseProjectRef(databaseUrl: string): string | null {
+  const match = databaseUrl.match(/postgres\.([a-z0-9]+):/);
+  return match?.[1] ?? null;
+}
+
+export async function deleteSupabaseProject(projectRef: string): Promise<void> {
+  const token = process.env.SUPABASE_MANAGEMENT_TOKEN;
+  if (!token) throw new Error('SUPABASE_MANAGEMENT_TOKEN is not set');
+
+  const res = await fetch(`${SUPABASE_API}/v1/projects/${projectRef}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${token}` },
+  });
+
+  // 404 is fine — it may already be gone from a prior teardown attempt.
+  if (!res.ok && res.status !== 404) {
+    const text = await res.text();
+    throw new Error(
+      `Supabase deleteProject(${projectRef}) failed (${res.status}): ${text}`
+    );
+  }
+}

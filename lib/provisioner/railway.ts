@@ -134,19 +134,54 @@ export async function addCustomDomain(input: {
   return { defaultDomain: data.customDomainCreate.domain };
 }
 
-export async function pauseService(serviceId: string): Promise<void> {
+export async function pauseService(
+  serviceId: string,
+  environmentId: string
+): Promise<void> {
+  await setReplicas({ serviceId, environmentId, numReplicas: 0 });
+}
+
+export async function resumeService(
+  serviceId: string,
+  environmentId: string
+): Promise<void> {
+  await setReplicas({ serviceId, environmentId, numReplicas: 1 });
+}
+
+async function setReplicas(input: {
+  serviceId: string;
+  environmentId: string;
+  numReplicas: number;
+}): Promise<void> {
   await graphql(
     `
-      mutation ServiceInstanceUpdate($input: ServiceInstanceUpdateInput!) {
-        serviceInstanceUpdate(input: $input)
+      mutation ServiceInstanceUpdate(
+        $serviceId: String!
+        $environmentId: String!
+        $input: ServiceInstanceUpdateInput!
+      ) {
+        serviceInstanceUpdate(
+          serviceId: $serviceId
+          environmentId: $environmentId
+          input: $input
+        )
       }
     `,
     {
-      input: {
-        serviceId,
-        // Scales the service to 0 replicas. Resume by setting back to 1.
-        numReplicas: 0,
-      },
+      serviceId: input.serviceId,
+      environmentId: input.environmentId,
+      input: { numReplicas: input.numReplicas },
     }
+  );
+}
+
+export async function deleteService(serviceId: string): Promise<void> {
+  await graphql(
+    `
+      mutation ServiceDelete($id: String!) {
+        serviceDelete(id: $id)
+      }
+    `,
+    { id: serviceId }
   );
 }

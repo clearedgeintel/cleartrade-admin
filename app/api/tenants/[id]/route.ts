@@ -2,12 +2,15 @@ import { NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { and, eq } from 'drizzle-orm';
 import { db } from '@/db';
-import { tenantInfra, tenants } from '@/db/schema';
+import { subscriptions, tenantInfra, tenants } from '@/db/schema';
 import { PLANS } from '@/lib/plans';
 import { getTenantSecrets, upsertTenantSecrets } from '@/lib/tenant-secrets';
 import { upsertServiceVariables } from '@/lib/provisioner/railway';
+import { deprovisionTenant } from '@/lib/provisioner/deprovision';
+import { stripe } from '@/lib/stripe';
 
 export const runtime = 'nodejs';
+export const maxDuration = 300;
 
 interface PatchBody {
   // Alpaca rotation — require both together.
@@ -189,6 +192,66 @@ export async function PATCH(
         });
       }
     }
+  }
+
+  return NextResponse.json({ ok: true });
+}
+
+// ─── DELETE: cancel + deprovision ─────────────────────────────────────
+// Cancels the Stripe subscription and tears down all tenant infra
+// (Railway service, Cloudflare CNAME, Supabase project). Idempotent.
+export async function DELETE(
+  _req: Request,
+  { params }: { params: { id: string } }
+) {
+  const { userId } = await auth();
+  if (!userId) {
+    return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  }
+
+  const [tenant] = await db
+    .select()
+    .from(tenants)
+    .where(and(eq(tenants.id, params.id), eq(tenants.ownerId, userId)))
+    .limit(1);
+  if (!tenant) {
+    return NextResponse.json({ error: 'not found' }, { status: 404 });
+  }
+  if (tenant.status === 'cancelled') {
+    return NextResponse.json({ ok: true, already: 'cancelled' });
+  }
+
+  // Cancel Stripe first — if billing teardown fails we abort to avoid
+  // continuing to bill for a deprovisioned tenant. Idempotent on Stripe's
+  // side: cancelling an already-cancelled sub returns 200.
+  const [sub] = await db
+    .select()
+    .from(subscriptions)
+    .where(eq(subscriptions.tenantId, tenant.id))
+    .limit(1);
+  if (sub?.stripeSubscriptionId && sub.status !== 'cancelled') {
+    try {
+      await stripe.subscriptions.cancel(sub.stripeSubscriptionId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'unknown';
+      return NextResponse.json(
+        { error: `stripe cancel failed: ${msg}` },
+        { status: 502 }
+      );
+    }
+  }
+
+  try {
+    await deprovisionTenant(tenant.id);
+  } catch (err) {
+    // Partial teardown — tenant is marked cancelled but some upstream
+    // resource lingered. Admin can retry from the admin panel.
+    const msg = err instanceof Error ? err.message : 'unknown';
+    console.error(`[delete tenant ${tenant.slug}] ${msg}`);
+    return NextResponse.json(
+      { ok: true, warning: msg },
+      { status: 200 }
+    );
   }
 
   return NextResponse.json({ ok: true });

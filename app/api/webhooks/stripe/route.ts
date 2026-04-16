@@ -6,6 +6,7 @@ import { db } from '@/db';
 import { tenants, subscriptions } from '@/db/schema';
 import { planFromPriceId, PLANS, type PlanId } from '@/lib/plans';
 import { eq } from 'drizzle-orm';
+import { deprovisionTenant } from '@/lib/provisioner/deprovision';
 
 // Stripe webhooks must receive the raw request body for signature verification.
 // Next.js App Router passes raw bytes via req.text() which is what the SDK needs.
@@ -173,11 +174,21 @@ async function handleSubscriptionDeleted(sub: Stripe.Subscription) {
     .select({ tenantId: subscriptions.tenantId })
     .from(subscriptions)
     .where(eq(subscriptions.stripeSubscriptionId, sub.id));
-  if (row) {
-    await db
-      .update(tenants)
-      .set({ status: 'cancelled', updatedAt: new Date() })
-      .where(eq(tenants.id, row.tenantId));
+  if (!row) return;
+
+  // Tear down infra so we stop paying Railway/Supabase for a cancelled
+  // tenant. Idempotent: if the user-initiated DELETE /api/tenants/[id]
+  // already ran it, this is a no-op.
+  try {
+    await deprovisionTenant(row.tenantId);
+  } catch (err) {
+    console.error(
+      `[stripe webhook] deprovision after subscription.deleted failed: ${
+        (err as Error).message
+      }`
+    );
+    // Status is already flipped to 'cancelled' inside deprovisionTenant.
+    // Admin can retry the teardown from the admin panel.
   }
 }
 
