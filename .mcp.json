@@ -1,18 +1,16 @@
 {
   "mcpServers": {
-    "supabase": {
+    "postgres": {
       "type": "stdio",
       "command": "cmd",
       "args": [
         "/c",
-        "npx",
-        "-y",
-        "@supabase/mcp-server-supabase@latest",
-        "--read-only",
-        "--project-ref=${SUPABASE_PROJECT_REF}"
+        "uvx",
+        "postgres-mcp",
+        "--access-mode=restricted"
       ],
       "env": {
-        "SUPABASE_ACCESS_TOKEN": "${SUPABASE_ACCESS_TOKEN}"
+        "DATABASE_URI": "${DATABASE_URL}"
       }
     }
   }
