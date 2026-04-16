@@ -5,7 +5,19 @@ import { auth } from '@clerk/nextjs/server';
 import { db } from '@/db';
 import { tenantInfra, tenants } from '@/db/schema';
 import { PLANS } from '@/lib/plans';
+import { fetchFromBot, resolveBotTarget } from '@/lib/bot-proxy';
 import { ProvisionButton } from './provision-button';
+
+interface BotHealth {
+  status: 'healthy' | 'degraded' | 'unhealthy';
+  checks?: Record<string, { ok: boolean; message?: string }>;
+}
+
+interface BotAccount {
+  portfolio_value?: string | number;
+  buying_power?: string | number;
+  cash?: string | number;
+}
 
 export default async function TenantDetailPage({
   params,
@@ -33,6 +45,25 @@ export default async function TenantDetailPage({
   const readyToProvision =
     tenant.onboardingCompletedAt && tenant.status !== 'active';
 
+  // Live data — only fetch if the bot is provisioned. We swallow errors so a
+  // flaky bot doesn't blow up the dashboard page.
+  let liveHealth: BotHealth | null = null;
+  let liveAccount: BotAccount | null = null;
+  let liveError: string | null = null;
+  if (tenant.status === 'active') {
+    const target = await resolveBotTarget(tenant.id, userId);
+    if (target) {
+      try {
+        [liveHealth, liveAccount] = await Promise.all([
+          fetchFromBot<BotHealth>({ target, path: '/api/health' }),
+          fetchFromBot<BotAccount>({ target, path: '/api/account' }),
+        ]);
+      } catch (err) {
+        liveError = err instanceof Error ? err.message : 'bot unreachable';
+      }
+    }
+  }
+
   return (
     <main className="min-h-screen">
       <header className="flex items-center justify-between border-b border-border px-6 py-4">
@@ -50,6 +81,12 @@ export default async function TenantDetailPage({
             <p className="mt-1 text-sm text-muted-foreground">
               {tenant.slug} · {plan.name} plan · status{' '}
               <StatusBadge status={tenant.status} />
+              {liveHealth && (
+                <>
+                  {' · health '}
+                  <StatusBadge status={liveHealth.status} />
+                </>
+              )}
             </p>
           </div>
           {infra?.subdomain && tenant.status === 'active' && (
@@ -96,10 +133,24 @@ export default async function TenantDetailPage({
           </div>
         )}
 
+        {liveAccount && (
+          <div className="mt-8 grid gap-4 md:grid-cols-3">
+            <Metric label="Portfolio value" value={formatUsd(liveAccount.portfolio_value)} />
+            <Metric label="Buying power" value={formatUsd(liveAccount.buying_power)} />
+            <Metric label="Cash" value={formatUsd(liveAccount.cash)} />
+          </div>
+        )}
+
+        {liveError && (
+          <div className="mt-8 rounded-md border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-700">
+            Can&apos;t reach bot: {liveError}
+          </div>
+        )}
+
         <div className="mt-8 grid gap-4 md:grid-cols-2">
           <InfoCard label="Subdomain" value={infra?.subdomain ?? '—'} />
           <InfoCard
-            label="Health"
+            label="Health (last check)"
             value={infra?.healthStatus ?? 'unknown'}
           />
           <InfoCard
@@ -122,13 +173,13 @@ export default async function TenantDetailPage({
 
 function StatusBadge({ status }: { status: string }) {
   const color =
-    status === 'active'
+    status === 'active' || status === 'healthy'
       ? 'bg-green-500/10 text-green-600'
       : status === 'provisioning'
       ? 'bg-blue-500/10 text-blue-600'
-      : status === 'paused' || status === 'past_due'
+      : status === 'degraded' || status === 'paused' || status === 'past_due'
       ? 'bg-yellow-500/10 text-yellow-600'
-      : status === 'cancelled'
+      : status === 'cancelled' || status === 'unhealthy'
       ? 'bg-red-500/10 text-red-600'
       : 'bg-muted text-muted-foreground';
   return (
@@ -147,4 +198,26 @@ function InfoCard({ label, value }: { label: string; value: string }) {
       <div className="mt-1 truncate font-mono text-sm">{value}</div>
     </div>
   );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-border px-4 py-3">
+      <div className="text-xs uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      <div className="mt-1 text-2xl font-semibold">{value}</div>
+    </div>
+  );
+}
+
+function formatUsd(v: string | number | undefined): string {
+  if (v === undefined || v === null) return '—';
+  const n = typeof v === 'string' ? parseFloat(v) : v;
+  if (Number.isNaN(n)) return '—';
+  return n.toLocaleString('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 2,
+  });
 }
