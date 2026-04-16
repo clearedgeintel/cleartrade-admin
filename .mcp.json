@@ -6,6 +6,8 @@
       "args": [
         "/c",
         "uvx",
+        "--python",
+        "3.12",
         "postgres-mcp",
         "--access-mode=restricted"
       ],
