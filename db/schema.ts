@@ -4,6 +4,7 @@ import {
   text,
   timestamp,
   uuid,
+  integer,
   pgEnum,
 } from 'drizzle-orm/pg-core';
 
@@ -108,6 +109,15 @@ export const tenantInfra = pgTable('tenant_infra', {
   lastHealthCheck: timestamp('last_health_check', { withTimezone: true }),
   provisionedAt: timestamp('provisioned_at', { withTimezone: true }),
   version: text('version'), // bot Docker image tag
+  // Provisioning-worker bookkeeping. The background sweep increments
+  // attempts on each failure, records the last error for the admin panel,
+  // and uses last_provision_attempt_at as both a backoff throttle and a
+  // soft lock so overlapping sweeps don't double-provision the same tenant.
+  provisionAttempts: integer('provision_attempts').notNull().default(0),
+  lastProvisionError: text('last_provision_error'),
+  lastProvisionAttemptAt: timestamp('last_provision_attempt_at', {
+    withTimezone: true,
+  }),
 });
 
 // ─── Tenant credentials vault ─────────────────────────────────────────────

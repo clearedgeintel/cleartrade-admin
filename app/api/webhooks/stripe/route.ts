@@ -138,9 +138,10 @@ async function handleInvoicePaid(invoice: Stripe.Invoice) {
     .set({ status: 'active' })
     .where(eq(subscriptions.stripeSubscriptionId, subId));
 
-  // Transition tenant into 'provisioning' so the Railway worker (next commit)
-  // can pick it up. If it's already past 'provisioning' this is a no-op via
-  // the status check.
+  // Transition tenant into 'provisioning' so the background provisioning
+  // worker (lib/provisioner/worker.ts, driven by /api/cron/provision) picks
+  // it up on its next sweep. Onboarding must also be complete before the
+  // worker will act, so an unboarded tenant safely waits here.
   const [row] = await db
     .select({ tenantId: subscriptions.tenantId })
     .from(subscriptions)

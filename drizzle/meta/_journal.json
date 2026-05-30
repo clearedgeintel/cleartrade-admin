@@ -15,6 +15,13 @@
       "when": 1776318347371,
       "tag": "0001_onboarding_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1780113443622,
+      "tag": "0002_provision_worker",
+      "breakpoints": true
     }
   ]
 }
