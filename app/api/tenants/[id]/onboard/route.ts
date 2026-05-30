@@ -69,9 +69,13 @@ export async function POST(
       riskTolerance: body.riskTolerance,
       agencyMode: body.agencyMode,
       onboardingCompletedAt: new Date(),
-      // Advance the state machine — the Railway worker (next commit) picks
-      // this up. Only flip if subscription is already paid; otherwise stay
-      // 'pending' until invoice.paid fires.
+      // Advance the state machine to 'provisioning'. The background worker
+      // (lib/provisioner/worker.ts via /api/cron/provision) sweeps tenants in
+      // this state and drives the Railway/Supabase/Cloudflare pipeline — no
+      // manual button click required. In the Stripe flow the subscription is
+      // already active by the time onboarding runs (checkout.session.completed
+      // created the tenant); the dev-bypass flow has no subscription and still
+      // provisions, which is intended for private beta.
       status: 'provisioning',
       updatedAt: new Date(),
     })

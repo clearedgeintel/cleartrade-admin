@@ -9,7 +9,7 @@ import { addCustomDomain, createBotService } from './railway';
 import { addCNAME } from './cloudflare';
 
 const BOT_IMAGE =
-  process.env.BOT_DOCKER_IMAGE ?? 'ghcr.io/cleartrade/alpaca-trader:latest';
+  process.env.BOT_DOCKER_IMAGE ?? 'ghcr.io/clearedgeintel/alpaca-trader:latest';
 const HEALTH_POLL_MS = 5_000;
 const HEALTH_POLL_MAX = 24; // 24 * 5s = 2 min
 
@@ -54,6 +54,19 @@ export async function provisionTenant(tenantId: string): Promise<void> {
         subdomain: `${tenant.slug}.${baseDomain}`,
         botApiKey: generateBotApiKey(),
       })
+      .returning();
+  } else if (!infra.subdomain || !infra.botApiKey) {
+    // The row may have been pre-created by the provisioning worker purely to
+    // hold its claim lock (subdomain/botApiKey null). Backfill the identity
+    // fields before any stage relies on them. Only fill what's missing so a
+    // re-run never rotates an already-issued bot API key.
+    [infra] = await db
+      .update(tenantInfra)
+      .set({
+        subdomain: infra.subdomain ?? `${tenant.slug}.${baseDomain}`,
+        botApiKey: infra.botApiKey ?? generateBotApiKey(),
+      })
+      .where(eq(tenantInfra.tenantId, tenantId))
       .returning();
   }
 
