@@ -143,7 +143,10 @@ export default async function TenantDetailPage({
               2 minutes.
             </p>
             <div className="mt-4">
-              <ProvisionButton tenantId={tenant.id} />
+              <ProvisionButton
+                tenantId={tenant.id}
+                initialStatus={tenant.status}
+              />
             </div>
           </div>
         )}

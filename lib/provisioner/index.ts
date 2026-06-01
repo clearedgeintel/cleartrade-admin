@@ -4,9 +4,18 @@ import { tenantInfra, tenants } from '@/db/schema';
 import type { Tenant } from '@/db/schema';
 import { getTenantSecrets } from '@/lib/tenant-secrets';
 import { buildBotEnvVars, generateBotApiKey } from './env-vars';
-import { createSupabaseProject } from './supabase';
-import { addCustomDomain, createBotService } from './railway';
+import {
+  createSupabaseProject,
+  parseProjectRef,
+  waitForProjectReady,
+} from './supabase';
+import {
+  addCustomDomain,
+  createBotService,
+  getLatestDeploymentStatus,
+} from './railway';
 import { addCNAME } from './cloudflare';
+import { clearProvisionEvents, emitProvisionEvent } from './events';
 
 const BOT_IMAGE =
   process.env.BOT_DOCKER_IMAGE ?? 'ghcr.io/clearedgeintel/alpaca-trader:latest';
@@ -28,15 +37,31 @@ export async function provisionTenant(tenantId: string): Promise<void> {
     .limit(1);
   if (!tenant) throw new Error(`tenant ${tenantId} not found`);
 
+  // Fresh log for this attempt.
+  await clearProvisionEvents(tenantId);
+  await emitProvisionEvent(
+    tenantId,
+    'info',
+    `Starting provisioning for "${tenant.name}" (${tenant.slug})`
+  );
+
   const secrets = await getTenantSecrets(tenantId);
   if (!secrets) {
+    await emitProvisionEvent(
+      tenantId,
+      'error',
+      'Onboarding incomplete — no Alpaca credentials on file.'
+    );
     throw new Error(
       `tenant ${tenantId} has no secrets — onboarding incomplete`
     );
   }
 
   const baseDomain = process.env.BASE_DOMAIN;
-  if (!baseDomain) throw new Error('BASE_DOMAIN is not set');
+  if (!baseDomain) {
+    await emitProvisionEvent(tenantId, 'error', 'BASE_DOMAIN is not set.');
+    throw new Error('BASE_DOMAIN is not set');
+  }
 
   // Load or seed the infra row. We keep partial progress here so reruns are
   // safe — each stage checks whether its field is already populated.
@@ -72,6 +97,11 @@ export async function provisionTenant(tenantId: string): Promise<void> {
 
   // Stage 1: create tenant Postgres (separate Supabase project).
   if (!infra.databaseUrl) {
+    await emitProvisionEvent(
+      tenantId,
+      'info',
+      'Creating isolated database (new Supabase project)…'
+    );
     const { databaseUrl, projectRef } = await createSupabaseProject({
       name: `bot-${tenant.slug}`,
     });
@@ -80,13 +110,52 @@ export async function provisionTenant(tenantId: string): Promise<void> {
       .set({ databaseUrl })
       .where(eq(tenantInfra.tenantId, tenantId))
       .returning();
-    console.info(
-      `[provisioner] tenant ${tenant.slug}: supabase project ${projectRef} created`
+    await emitProvisionEvent(
+      tenantId,
+      'success',
+      `Database created (project ${projectRef}).`
     );
+  } else {
+    await emitProvisionEvent(tenantId, 'info', 'Database already provisioned — skipping.');
+  }
+
+  // Stage 1b: wait for the database to actually be reachable before we deploy
+  // the bot — otherwise the bot crashes on its first connection. Skipped once
+  // the Railway service already exists (we're past this point on a resume).
+  if (!infra.railwayServiceId) {
+    const projectRef = parseProjectRef(infra.databaseUrl!);
+    if (projectRef) {
+      await emitProvisionEvent(
+        tenantId,
+        'info',
+        'Waiting for the database to come online…'
+      );
+      const ready = await waitForProjectReady(projectRef, {
+        onStatus: (s) =>
+          emitProvisionEvent(tenantId, 'info', `Database status: ${s}`),
+      });
+      if (ready) {
+        await emitProvisionEvent(tenantId, 'success', 'Database is ready.');
+      } else {
+        await emitProvisionEvent(
+          tenantId,
+          'warn',
+          'Database still coming up — will resume provisioning shortly.'
+        );
+        throw new Error(
+          `tenant ${tenant.slug}: database not ready yet; provisioning will resume`
+        );
+      }
+    }
   }
 
   // Stage 2: create Railway service with env vars.
   if (!infra.railwayServiceId) {
+    await emitProvisionEvent(
+      tenantId,
+      'info',
+      'Creating bot service on Railway from the container image…'
+    );
     const envVars = buildBotEnvVars({
       tenant,
       secrets,
@@ -107,22 +176,33 @@ export async function provisionTenant(tenantId: string): Promise<void> {
       })
       .where(eq(tenantInfra.tenantId, tenantId))
       .returning();
-    console.info(
-      `[provisioner] tenant ${tenant.slug}: railway service ${serviceId} created`
+    await emitProvisionEvent(
+      tenantId,
+      'success',
+      'Bot service created — image is building.'
     );
+  } else {
+    await emitProvisionEvent(tenantId, 'info', 'Bot service already exists — skipping.');
   }
 
   // Stage 3: custom domain on Railway + Cloudflare CNAME.
   if (infra.railwayServiceId && infra.railwayEnvId) {
+    await emitProvisionEvent(
+      tenantId,
+      'info',
+      `Configuring subdomain ${infra.subdomain}…`
+    );
     const { defaultDomain } = await addCustomDomain({
       serviceId: infra.railwayServiceId,
       environmentId: infra.railwayEnvId,
       domain: infra.subdomain!,
-    }).catch((err) => {
+    }).catch(async (err) => {
       // If the domain already exists on the service, Railway errors —
       // treat that as success and fall back to the convention.
-      console.warn(
-        `[provisioner] addCustomDomain warning: ${(err as Error).message}`
+      await emitProvisionEvent(
+        tenantId,
+        'warn',
+        `Railway custom domain step: ${(err as Error).message} — using default domain.`
       );
       return { defaultDomain: `bot-${tenant.slug}.up.railway.app` };
     });
@@ -130,17 +210,37 @@ export async function provisionTenant(tenantId: string): Promise<void> {
     await addCNAME({
       name: tenant.slug,
       target: defaultDomain,
-    }).catch((err) => {
-      // If the DNS record already exists, continue — we're idempotent.
-      console.warn(
-        `[provisioner] addCNAME warning: ${(err as Error).message}`
+    })
+      .then(() =>
+        emitProvisionEvent(
+          tenantId,
+          'success',
+          `DNS record created: ${infra.subdomain} → ${defaultDomain}`
+        )
+      )
+      .catch((err) =>
+        // If the DNS record already exists, continue — we're idempotent.
+        emitProvisionEvent(
+          tenantId,
+          'warn',
+          `DNS step: ${(err as Error).message}`
+        )
       );
-    });
   }
 
-  // Stage 4: poll bot /api/health until it returns 200 or we give up.
+  // Stage 4: wait for the bot to come online (and surface deploy failures).
+  await emitProvisionEvent(
+    tenantId,
+    'info',
+    'Waiting for the bot to deploy and pass its health check…'
+  );
   const healthUrl = `https://${infra.subdomain}/api/health`;
-  const healthy = await pollHealthy(healthUrl);
+  const healthy = await pollHealthy({
+    url: healthUrl,
+    tenantId,
+    serviceId: infra.railwayServiceId ?? undefined,
+    environmentId: infra.railwayEnvId ?? undefined,
+  });
 
   const finalStatus: Tenant['status'] = healthy ? 'active' : 'paused';
 
@@ -158,7 +258,18 @@ export async function provisionTenant(tenantId: string): Promise<void> {
     .set({ status: finalStatus, updatedAt: new Date() })
     .where(eq(tenants.id, tenantId));
 
-  if (!healthy) {
+  if (healthy) {
+    await emitProvisionEvent(
+      tenantId,
+      'success',
+      `Bot is live at https://${infra.subdomain} ✅`
+    );
+  } else {
+    await emitProvisionEvent(
+      tenantId,
+      'error',
+      `Bot did not become healthy in time — tenant left paused. Check the bot deploy logs on Railway.`
+    );
     throw new Error(
       `tenant ${tenant.slug} provisioned but failed health check after ${
         (HEALTH_POLL_MS * HEALTH_POLL_MAX) / 1000
@@ -167,8 +278,39 @@ export async function provisionTenant(tenantId: string): Promise<void> {
   }
 }
 
-async function pollHealthy(url: string): Promise<boolean> {
+async function pollHealthy(opts: {
+  url: string;
+  tenantId: string;
+  serviceId?: string;
+  environmentId?: string;
+}): Promise<boolean> {
+  const { url, tenantId, serviceId, environmentId } = opts;
+  let lastDeployStatus: string | null = null;
+
   for (let attempt = 0; attempt < HEALTH_POLL_MAX; attempt++) {
+    // Surface Railway deploy-status transitions in the live log, and bail
+    // early if the deploy failed — no point waiting out the whole poll.
+    if (serviceId && environmentId) {
+      try {
+        const status = await getLatestDeploymentStatus({
+          serviceId,
+          environmentId,
+        });
+        if (status && status !== lastDeployStatus) {
+          lastDeployStatus = status;
+          const failed = status === 'FAILED' || status === 'CRASHED';
+          await emitProvisionEvent(
+            tenantId,
+            failed ? 'error' : 'info',
+            `Bot deployment status: ${status}`
+          );
+          if (failed) return false;
+        }
+      } catch {
+        // status check is best-effort
+      }
+    }
+
     try {
       const res = await fetch(url, { cache: 'no-store' });
       if (res.ok) return true;

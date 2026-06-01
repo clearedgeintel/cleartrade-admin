@@ -5,6 +5,7 @@ import { db } from '@/db';
 import { subscriptions, tenantInfra, tenants } from '@/db/schema';
 import { PLANS } from '@/lib/plans';
 import { getTenantSecrets, maskSecret } from '@/lib/tenant-secrets';
+import { PlanSelector } from './plan-selector';
 
 export default async function AdminTenantDetailPage({
   params,
@@ -179,6 +180,18 @@ export default async function AdminTenantDetailPage({
           ) : (
             <p className="text-sm text-muted-foreground">No subscription.</p>
           )}
+        </Card>
+
+        <Card title="Plan / tier (admin override)">
+          <PlanSelector
+            tenantId={tenant.id}
+            currentPlan={tenant.plan}
+            plans={Object.values(PLANS).map((p) => ({
+              id: p.id,
+              name: p.name,
+              priceMonthly: p.priceMonthly,
+            }))}
+          />
         </Card>
       </div>
     </div>

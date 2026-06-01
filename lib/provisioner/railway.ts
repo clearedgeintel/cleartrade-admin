@@ -30,6 +30,34 @@ async function graphql<T>(
   return body.data;
 }
 
+export async function listProjectServices(): Promise<
+  { id: string; name: string }[]
+> {
+  const projectId = process.env.RAILWAY_PROJECT_ID;
+  if (!projectId) throw new Error('RAILWAY_PROJECT_ID is not set');
+
+  const data = await graphql<{
+    project: { services: { edges: { node: { id: string; name: string } }[] } };
+  }>(
+    `
+      query ProjectServices($id: String!) {
+        project(id: $id) {
+          services {
+            edges {
+              node {
+                id
+                name
+              }
+            }
+          }
+        }
+      }
+    `,
+    { id: projectId }
+  );
+  return data.project.services.edges.map((e) => e.node);
+}
+
 export async function createBotService(input: {
   tenantSlug: string;
   image: string;
@@ -173,6 +201,38 @@ async function setReplicas(input: {
       input: { numReplicas: input.numReplicas },
     }
   );
+}
+
+/**
+ * Returns the status of the service's most recent deployment (e.g. BUILDING,
+ * DEPLOYING, SUCCESS, FAILED, CRASHED), or null if there are no deployments
+ * yet. Used to surface deploy failures in the live provisioning log instead of
+ * silently waiting out the health poll.
+ */
+export async function getLatestDeploymentStatus(input: {
+  serviceId: string;
+  environmentId: string;
+}): Promise<string | null> {
+  const data = await graphql<{
+    deployments: { edges: { node: { status: string } }[] };
+  }>(
+    `
+      query LatestDeployment($serviceId: String!, $environmentId: String!) {
+        deployments(
+          input: { serviceId: $serviceId, environmentId: $environmentId }
+          first: 1
+        ) {
+          edges {
+            node {
+              status
+            }
+          }
+        }
+      }
+    `,
+    { serviceId: input.serviceId, environmentId: input.environmentId }
+  );
+  return data.deployments.edges[0]?.node.status ?? null;
 }
 
 export async function deleteService(serviceId: string): Promise<void> {
