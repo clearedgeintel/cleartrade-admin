@@ -2,31 +2,124 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ─────────────────────────────────────────────────────────────────────────
+   ClearTrade — dark trading-terminal design system.
+   Dark-only by design: a trading product reads as serious in the dark.
+   Colors are HSL channel triples so Tailwind can do hsl(var(--x) / alpha).
+   ───────────────────────────────────────────────────────────────────────── */
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222 47% 11%;
-    --muted: 210 40% 96%;
-    --muted-foreground: 215 16% 47%;
-    --border: 214 32% 91%;
-    --primary: 222 47% 11%;
-    --primary-foreground: 0 0% 100%;
+    --background: 224 47% 4%; /* near-black navy */
+    --surface: 222 40% 7%; /* cards / panels */
+    --surface-2: 220 33% 10%; /* elevated / hover */
+    --border: 220 26% 14%; /* hairlines */
+    --border-strong: 218 22% 22%;
+
+    --foreground: 210 40% 97%;
+    --muted: 220 33% 10%;
+    --muted-foreground: 217 16% 56%;
+
+    --primary: 190 92% 50%; /* electric cyan — brand / CTAs */
+    --primary-foreground: 224 47% 5%;
+    --accent: 190 92% 50%;
+
+    --profit: 152 64% 47%; /* green — gains, up */
+    --loss: 358 70% 58%; /* red — losses, down */
+    --warning: 38 92% 56%; /* amber — degraded / past_due */
+
+    --radius: 0.625rem;
   }
 
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --background: 222 47% 6%;
-      --foreground: 210 40% 98%;
-      --muted: 217 33% 17%;
-      --muted-foreground: 215 20% 65%;
-      --border: 217 33% 17%;
-      --primary: 210 40% 98%;
-      --primary-foreground: 222 47% 11%;
-    }
+  * {
+    border-color: hsl(var(--border));
   }
 
   body {
-    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto,
-      Helvetica, Arial, sans-serif;
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Numbers everywhere line up. */
+  .tnum,
+  .font-mono {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum', 'zero';
+  }
+
+  /* Thin, unobtrusive scrollbars that match the terminal. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border-strong)) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: hsl(var(--border-strong));
+    border-radius: 8px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: hsl(217 16% 32%);
+  }
+}
+
+@layer utilities {
+  /* Faint dotted grid — the backdrop of a trading terminal. */
+  .bg-grid {
+    background-image: radial-gradient(
+      hsl(var(--border-strong) / 0.55) 1px,
+      transparent 1px
+    );
+    background-size: 22px 22px;
+  }
+
+  /* Ambient glow behind hero / key panels. */
+  .glow-accent {
+    box-shadow: 0 0 0 1px hsl(var(--accent) / 0.25),
+      0 0 40px -8px hsl(var(--accent) / 0.45);
+  }
+
+  .text-glow {
+    text-shadow: 0 0 24px hsl(var(--accent) / 0.55);
+  }
+
+  /* Subtle top-edge sheen used on panels. */
+  .panel {
+    background: linear-gradient(
+      180deg,
+      hsl(var(--surface-2) / 0.7),
+      hsl(var(--surface))
+    );
+  }
+
+  @keyframes pulse-dot {
+    0%,
+    100% {
+      opacity: 1;
+      box-shadow: 0 0 0 0 currentColor;
+    }
+    50% {
+      opacity: 0.75;
+      box-shadow: 0 0 0 4px transparent;
+    }
+  }
+  .animate-pulse-dot {
+    animation: pulse-dot 1.8s ease-in-out infinite;
+  }
+
+  @keyframes ticker {
+    from {
+      transform: translateX(0);
+    }
+    to {
+      transform: translateX(-50%);
+    }
+  }
+  .animate-ticker {
+    animation: ticker 32s linear infinite;
   }
 }
