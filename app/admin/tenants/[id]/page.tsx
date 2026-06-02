@@ -5,6 +5,7 @@ import { db } from '@/db';
 import { subscriptions, tenantInfra, tenants } from '@/db/schema';
 import { PLANS } from '@/lib/plans';
 import { getTenantSecrets, maskSecret } from '@/lib/tenant-secrets';
+import { StatusBadge } from '@/components/ui';
 import { PlanSelector } from './plan-selector';
 
 export default async function AdminTenantDetailPage({
@@ -52,9 +53,9 @@ export default async function AdminTenantDetailPage({
           <h1 className="mt-2 text-3xl font-semibold tracking-tight">
             {tenant.name}
           </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {tenant.slug} · {plan.name} · status{' '}
-            <span className="font-mono">{tenant.status}</span>
+          <p className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
+            <span className="font-mono">{tenant.slug}</span> · {plan.name} ·
+            <StatusBadge status={tenant.status} />
           </p>
         </div>
         {infraRow?.subdomain && (
