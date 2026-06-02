@@ -30,6 +30,34 @@ async function graphql<T>(
   return body.data;
 }
 
+export async function listProjectServices(): Promise<
+  { id: string; name: string }[]
+> {
+  const projectId = process.env.RAILWAY_PROJECT_ID;
+  if (!projectId) throw new Error('RAILWAY_PROJECT_ID is not set');
+
+  const data = await graphql<{
+    project: { services: { edges: { node: { id: string; name: string } }[] } };
+  }>(
+    `
+      query ProjectServices($id: String!) {
+        project(id: $id) {
+          services {
+            edges {
+              node {
+                id
+                name
+              }
+            }
+          }
+        }
+      }
+    `,
+    { id: projectId }
+  );
+  return data.project.services.edges.map((e) => e.node);
+}
+
 export async function createBotService(input: {
   tenantSlug: string;
   image: string;
@@ -106,18 +134,162 @@ export async function upsertServiceVariables(input: {
   );
 }
 
+// The bot listens on this port; Railway needs it to route a custom domain.
+const BOT_PORT = 3001;
+
+export interface CustomDomainSetup {
+  cnameTarget: string; // CNAME value to point the subdomain at
+  verificationHost: string | null; // _railway-verify.{slug} (TXT name)
+  verificationToken: string | null; // railway-verify=… (TXT value)
+}
+
+interface CustomDomainStatus {
+  dnsRecords: { recordType: string; requiredValue: string }[];
+  verificationDnsHost: string | null;
+  verificationToken: string | null;
+}
+
+function mapStatus(status: CustomDomainStatus): CustomDomainSetup {
+  const cname =
+    status.dnsRecords.find((r) => /cname/i.test(r.recordType)) ??
+    status.dnsRecords[0];
+  return {
+    cnameTarget: cname?.requiredValue ?? '',
+    verificationHost: status.verificationDnsHost,
+    verificationToken: status.verificationToken,
+  };
+}
+
+const STATUS_FIELDS = `
+  status {
+    dnsRecords { recordType requiredValue }
+    verificationDnsHost
+    verificationToken
+  }
+`;
+
+/**
+ * Registers `domain` as a custom domain on the service and returns the DNS
+ * records the caller must create (the CNAME target + Railway's ownership-
+ * verification TXT). Idempotent: if the domain is already registered, reads the
+ * existing records instead of failing. NOTE: `projectId` is required by
+ * Railway's API — omitting it returns a generic "Problem processing request".
+ */
 export async function addCustomDomain(input: {
+  projectId: string;
   serviceId: string;
   environmentId: string;
   domain: string;
-}): Promise<{ defaultDomain: string }> {
+}): Promise<CustomDomainSetup> {
+  try {
+    const data = await graphql<{
+      customDomainCreate: { status: CustomDomainStatus };
+    }>(
+      `
+        mutation CustomDomainCreate($input: CustomDomainCreateInput!) {
+          customDomainCreate(input: $input) {
+            id
+            domain
+            ${STATUS_FIELDS}
+          }
+        }
+      `,
+      {
+        input: {
+          projectId: input.projectId,
+          environmentId: input.environmentId,
+          serviceId: input.serviceId,
+          domain: input.domain,
+          targetPort: BOT_PORT,
+        },
+      }
+    );
+    return mapStatus(data.customDomainCreate.status);
+  } catch {
+    // Likely already registered — read the existing record.
+    const existing = await getCustomDomainStatus(input);
+    if (existing) return existing;
+    throw new Error(`could not register or find custom domain ${input.domain}`);
+  }
+}
+
+async function getCustomDomainStatus(input: {
+  projectId: string;
+  serviceId: string;
+  environmentId: string;
+  domain: string;
+}): Promise<CustomDomainSetup | null> {
   const data = await graphql<{
-    customDomainCreate: { id: string; domain: string };
+    domains: {
+      customDomains: { domain: string; status: CustomDomainStatus }[];
+    };
   }>(
     `
-      mutation CustomDomainCreate($input: CustomDomainCreateInput!) {
-        customDomainCreate(input: $input) {
-          id
+      query Domains($projectId: String!, $environmentId: String!, $serviceId: String!) {
+        domains(
+          projectId: $projectId
+          environmentId: $environmentId
+          serviceId: $serviceId
+        ) {
+          customDomains {
+            domain
+            ${STATUS_FIELDS}
+          }
+        }
+      }
+    `,
+    {
+      projectId: input.projectId,
+      environmentId: input.environmentId,
+      serviceId: input.serviceId,
+    }
+  );
+  const match = data.domains.customDomains.find(
+    (d) => d.domain === input.domain
+  );
+  return match ? mapStatus(match.status) : null;
+}
+
+/**
+ * Returns a Railway-managed `*.up.railway.app` domain for the service, creating
+ * one if needed. Works on every plan (unlike custom domains), so it's the URL
+ * we health-check against and the immediate fallback while the custom domain's
+ * cert is still provisioning.
+ */
+export async function getOrCreateServiceDomain(input: {
+  projectId: string;
+  serviceId: string;
+  environmentId: string;
+}): Promise<string> {
+  const existing = await graphql<{
+    domains: { serviceDomains: { domain: string }[] };
+  }>(
+    `
+      query SvcDomains($projectId: String!, $environmentId: String!, $serviceId: String!) {
+        domains(
+          projectId: $projectId
+          environmentId: $environmentId
+          serviceId: $serviceId
+        ) {
+          serviceDomains {
+            domain
+          }
+        }
+      }
+    `,
+    {
+      projectId: input.projectId,
+      environmentId: input.environmentId,
+      serviceId: input.serviceId,
+    }
+  );
+  const found = existing.domains.serviceDomains[0]?.domain;
+  if (found) return found;
+
+  const created = await graphql<{ serviceDomainCreate: { domain: string } }>(
+    `
+      mutation ServiceDomainCreate($input: ServiceDomainCreateInput!) {
+        serviceDomainCreate(input: $input) {
           domain
         }
       }
@@ -126,12 +298,11 @@ export async function addCustomDomain(input: {
       input: {
         environmentId: input.environmentId,
         serviceId: input.serviceId,
-        domain: input.domain,
+        targetPort: BOT_PORT,
       },
     }
   );
-
-  return { defaultDomain: data.customDomainCreate.domain };
+  return created.serviceDomainCreate.domain;
 }
 
 export async function pauseService(
@@ -173,6 +344,38 @@ async function setReplicas(input: {
       input: { numReplicas: input.numReplicas },
     }
   );
+}
+
+/**
+ * Returns the status of the service's most recent deployment (e.g. BUILDING,
+ * DEPLOYING, SUCCESS, FAILED, CRASHED), or null if there are no deployments
+ * yet. Used to surface deploy failures in the live provisioning log instead of
+ * silently waiting out the health poll.
+ */
+export async function getLatestDeploymentStatus(input: {
+  serviceId: string;
+  environmentId: string;
+}): Promise<string | null> {
+  const data = await graphql<{
+    deployments: { edges: { node: { status: string } }[] };
+  }>(
+    `
+      query LatestDeployment($serviceId: String!, $environmentId: String!) {
+        deployments(
+          input: { serviceId: $serviceId, environmentId: $environmentId }
+          first: 1
+        ) {
+          edges {
+            node {
+              status
+            }
+          }
+        }
+      }
+    `,
+    { serviceId: input.serviceId, environmentId: input.environmentId }
+  );
+  return data.deployments.edges[0]?.node.status ?? null;
 }
 
 export async function deleteService(serviceId: string): Promise<void> {

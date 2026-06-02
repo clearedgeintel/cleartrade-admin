@@ -7,15 +7,12 @@ import { tenants, subscriptions } from '@/db/schema';
 import { planFromPriceId, PLANS, type PlanId } from '@/lib/plans';
 import { eq } from 'drizzle-orm';
 import { deprovisionTenant } from '@/lib/provisioner/deprovision';
+import { uniqueTenantSlug } from '@/lib/slug';
 
 // Stripe webhooks must receive the raw request body for signature verification.
 // Next.js App Router passes raw bytes via req.text() which is what the SDK needs.
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-function randomSlug() {
-  return `ct-${randomBytes(4).toString('hex')}`;
-}
 
 export async function POST(req: Request) {
   const secret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -80,12 +77,19 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   if (typeof session.subscription !== 'string') return;
 
   // Create tenant row in 'pending' state. The onboarding wizard will fill in
-  // the Alpaca keys; Railway provisioning (next commit) flips status to active.
+  // the Alpaca keys; the provisioning worker flips status to active. Use the
+  // customer's name from Checkout to derive a readable slug/subdomain, falling
+  // back to a random label if Stripe didn't collect one.
+  const name =
+    session.customer_details?.name?.trim() ||
+    `Tenant ${randomBytes(2).toString('hex')}`;
+  const slug = await uniqueTenantSlug(name);
+
   const [tenant] = await db
     .insert(tenants)
     .values({
-      name: `Tenant ${randomBytes(2).toString('hex')}`,
-      slug: randomSlug(),
+      name,
+      slug,
       ownerId: clerkUserId,
       plan,
       status: 'pending',

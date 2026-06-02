@@ -5,6 +5,7 @@ import {
   timestamp,
   uuid,
   integer,
+  index,
   pgEnum,
 } from 'drizzle-orm/pg-core';
 
@@ -50,6 +51,13 @@ export const riskTolerance = pgEnum('risk_tolerance', [
 ]);
 
 export const agencyMode = pgEnum('agency_mode', ['rules', 'hybrid', 'ai']);
+
+export const provisionEventLevel = pgEnum('provision_event_level', [
+  'info',
+  'warn',
+  'error',
+  'success',
+]);
 
 // ─── Tenants ──────────────────────────────────────────────────────────────
 // One row per customer bot instance. slug drives the subdomain.
@@ -136,6 +144,30 @@ export const tenantSecrets = pgTable('tenant_secrets', {
   polygonApiKey: text('polygon_api_key'),
 });
 
+// ─── Provisioning activity log ────────────────────────────────────────────
+// Append-only stream of provisioning steps, surfaced live in the dashboard
+// while a tenant is being provisioned. Cascade-deleted with the tenant.
+export const provisionEvents = pgTable(
+  'provision_events',
+  {
+    id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    level: provisionEventLevel('level').notNull().default('info'),
+    message: text('message').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    tenantCreatedIdx: index('provision_events_tenant_created_idx').on(
+      t.tenantId,
+      t.createdAt
+    ),
+  })
+);
+
 // ─── Type exports ─────────────────────────────────────────────────────────
 export type Tenant = typeof tenants.$inferSelect;
 export type NewTenant = typeof tenants.$inferInsert;
@@ -148,3 +180,6 @@ export type NewTenantInfra = typeof tenantInfra.$inferInsert;
 
 export type TenantSecrets = typeof tenantSecrets.$inferSelect;
 export type NewTenantSecrets = typeof tenantSecrets.$inferInsert;
+
+export type ProvisionEvent = typeof provisionEvents.$inferSelect;
+export type NewProvisionEvent = typeof provisionEvents.$inferInsert;

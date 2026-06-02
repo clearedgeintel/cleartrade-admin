@@ -4,6 +4,7 @@ import { UserButton } from '@clerk/nextjs';
 import { db } from '@/db';
 import { tenants } from '@/db/schema';
 import { eq } from 'drizzle-orm';
+import { NewBotButton } from './new-bot-button';
 
 export default async function DashboardPage() {
   const { userId } = await auth();
@@ -33,12 +34,7 @@ export default async function DashboardPage() {
                 : `${myTenants.length} bot${myTenants.length === 1 ? '' : 's'}.`}
             </p>
           </div>
-          <Link
-            href="/onboarding"
-            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
-          >
-            New bot
-          </Link>
+          <NewBotButton />
         </div>
 
         <ul className="mt-8 divide-y divide-border rounded-lg border border-border">
