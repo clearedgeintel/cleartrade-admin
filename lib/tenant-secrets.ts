@@ -9,6 +9,9 @@ export interface PlainTenantSecrets {
   alpacaBaseUrl: string;
   anthropicApiKey: string | null;
   polygonApiKey: string | null;
+  // Optional bring-your-own Postgres connection string. Null = we provision a
+  // database for the tenant. Encrypted at rest (contains a password).
+  databaseUrl: string | null;
 }
 
 /**
@@ -35,6 +38,7 @@ export async function getTenantSecrets(
     polygonApiKey: row.polygonApiKey
       ? decryptSecret(row.polygonApiKey)
       : null,
+    databaseUrl: row.databaseUrl ? decryptSecret(row.databaseUrl) : null,
   };
 }
 
@@ -57,6 +61,7 @@ export async function upsertTenantSecrets(
     polygonApiKey: input.polygonApiKey
       ? encryptSecret(input.polygonApiKey)
       : null,
+    databaseUrl: input.databaseUrl ? encryptSecret(input.databaseUrl) : null,
   };
 
   await db
@@ -70,6 +75,7 @@ export async function upsertTenantSecrets(
         alpacaBaseUrl: encryptedRow.alpacaBaseUrl,
         anthropicApiKey: encryptedRow.anthropicApiKey,
         polygonApiKey: encryptedRow.polygonApiKey,
+        databaseUrl: encryptedRow.databaseUrl,
       },
     });
 }

@@ -107,82 +107,103 @@ export async function provisionTenant(tenantId: string): Promise<void> {
       .returning();
   }
 
-  // Stage 1: create tenant Postgres (separate Supabase project).
+  // Stage 1: tenant Postgres. Use the customer's own database when they brought
+  // one (bring-your-own); otherwise create an isolated Supabase project.
   if (!infra.databaseUrl) {
-    await emitProvisionEvent(
-      tenantId,
-      'info',
-      'Creating isolated database (new Supabase project)…'
-    );
-    const { databaseUrl, projectRef } = await createSupabaseProject({
-      name: `bot-${tenant.slug}`,
-    });
-    [infra] = await db
-      .update(tenantInfra)
-      .set({ databaseUrl })
-      .where(eq(tenantInfra.tenantId, tenantId))
-      .returning();
-    await emitProvisionEvent(
-      tenantId,
-      'success',
-      `Database created (project ${projectRef}).`
-    );
+    if (secrets.databaseUrl) {
+      await emitProvisionEvent(
+        tenantId,
+        'info',
+        'Using your provided database (bring-your-own)…'
+      );
+      [infra] = await db
+        .update(tenantInfra)
+        .set({ databaseUrl: secrets.databaseUrl, managedDatabase: false })
+        .where(eq(tenantInfra.tenantId, tenantId))
+        .returning();
+      await emitProvisionEvent(tenantId, 'success', 'Database configured.');
+    } else {
+      await emitProvisionEvent(
+        tenantId,
+        'info',
+        'Creating isolated database (new Supabase project)…'
+      );
+      const { databaseUrl, projectRef } = await createSupabaseProject({
+        name: `bot-${tenant.slug}`,
+      });
+      [infra] = await db
+        .update(tenantInfra)
+        .set({ databaseUrl, managedDatabase: true })
+        .where(eq(tenantInfra.tenantId, tenantId))
+        .returning();
+      await emitProvisionEvent(
+        tenantId,
+        'success',
+        `Database created (project ${projectRef}).`
+      );
+    }
   } else {
     await emitProvisionEvent(tenantId, 'info', 'Database already provisioned — skipping.');
   }
 
-  // Stage 1b: wait for the database to actually be reachable before we deploy
-  // the bot — otherwise the bot crashes on its first connection. Skipped once
-  // the Railway service already exists (we're past this point on a resume).
+  // Stage 1b: make sure the database is reachable before deploying the bot —
+  // it crashes on its first connection otherwise. Skipped on a resume past
+  // service creation.
   if (!infra.railwayServiceId) {
-    const projectRef = parseProjectRef(infra.databaseUrl!);
-    if (projectRef) {
-      await emitProvisionEvent(
-        tenantId,
-        'info',
-        'Waiting for the database to come online…'
-      );
-      const ready = await waitForProjectReady(projectRef, {
-        onStatus: (s) =>
-          emitProvisionEvent(tenantId, 'info', `Database status: ${s}`),
-      });
-      if (!ready) {
+    // For a database we manage, first wait for Supabase to report
+    // ACTIVE_HEALTHY (a BYO database is already up).
+    if (infra.managedDatabase) {
+      const projectRef = parseProjectRef(infra.databaseUrl!);
+      if (projectRef) {
         await emitProvisionEvent(
           tenantId,
-          'warn',
-          'Database still coming up — will resume provisioning shortly.'
+          'info',
+          'Waiting for the database to come online…'
         );
-        throw new Error(
-          `tenant ${tenant.slug}: database not ready yet; provisioning will resume`
-        );
+        const ready = await waitForProjectReady(projectRef, {
+          onStatus: (s) =>
+            emitProvisionEvent(tenantId, 'info', `Database status: ${s}`),
+        });
+        if (!ready) {
+          await emitProvisionEvent(
+            tenantId,
+            'warn',
+            'Database still coming up — will resume provisioning shortly.'
+          );
+          throw new Error(
+            `tenant ${tenant.slug}: database not ready yet; provisioning will resume`
+          );
+        }
+        await emitProvisionEvent(tenantId, 'success', 'Database is healthy.');
       }
-      await emitProvisionEvent(tenantId, 'success', 'Database is healthy.');
+    }
 
-      // ACTIVE_HEALTHY is not enough: the connection pooler registers the new
-      // project a little later. Wait until it actually accepts a connection —
-      // otherwise the bot crashes on boot with "tenant/user ... not found".
+    // Always verify the database actually accepts a connection (the pooler
+    // registers a managed project a little after ACTIVE_HEALTHY, and a BYO
+    // database needs checking too) before we deploy the bot against it.
+    await emitProvisionEvent(
+      tenantId,
+      'info',
+      'Verifying the database accepts connections…'
+    );
+    const connectable = await waitForDatabaseConnectable(infra.databaseUrl!);
+    if (connectable) {
       await emitProvisionEvent(
         tenantId,
-        'info',
-        'Verifying the database accepts connections…'
+        'success',
+        'Database is accepting connections.'
       );
-      const connectable = await waitForDatabaseConnectable(infra.databaseUrl!);
-      if (connectable) {
-        await emitProvisionEvent(
-          tenantId,
-          'success',
-          'Database is accepting connections.'
-        );
-      } else {
-        await emitProvisionEvent(
-          tenantId,
-          'warn',
-          'Database not accepting connections yet — will resume provisioning shortly.'
-        );
-        throw new Error(
-          `tenant ${tenant.slug}: database pooler not ready yet; provisioning will resume`
-        );
-      }
+    } else {
+      await emitProvisionEvent(
+        tenantId,
+        'warn',
+        infra.managedDatabase
+          ? 'Database not accepting connections yet — will resume provisioning shortly.'
+          : 'Could not connect to your database — check the connection string is reachable from the internet.'
+      );
+      throw new Error(
+        `tenant ${tenant.slug}: database not reachable yet; provisioning will resume`
+      );
     }
   }
 

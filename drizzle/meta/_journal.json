@@ -29,6 +29,13 @@
       "when": 1780290083933,
       "tag": "0003_provision_events",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1780374364473,
+      "tag": "0004_byo_database",
+      "breakpoints": true
     }
   ]
 }

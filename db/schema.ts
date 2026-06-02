@@ -5,6 +5,7 @@ import {
   timestamp,
   uuid,
   integer,
+  boolean,
   index,
   pgEnum,
 } from 'drizzle-orm/pg-core';
@@ -117,6 +118,9 @@ export const tenantInfra = pgTable('tenant_infra', {
   lastHealthCheck: timestamp('last_health_check', { withTimezone: true }),
   provisionedAt: timestamp('provisioned_at', { withTimezone: true }),
   version: text('version'), // bot Docker image tag
+  // True when we created the tenant's Postgres (and must tear it down). False
+  // when the customer brought their own database — we never delete that.
+  managedDatabase: boolean('managed_database').notNull().default(true),
   // Provisioning-worker bookkeeping. The background sweep increments
   // attempts on each failure, records the last error for the admin panel,
   // and uses last_provision_attempt_at as both a backoff throttle and a
@@ -142,6 +146,9 @@ export const tenantSecrets = pgTable('tenant_secrets', {
     .default('https://paper-api.alpaca.markets'),
   anthropicApiKey: text('anthropic_api_key'), // optional; falls back to shared key
   polygonApiKey: text('polygon_api_key'),
+  // Optional customer-provided Postgres URL (encrypted). When set, the bot uses
+  // this instead of a database we provision. Bring-your-own-database.
+  databaseUrl: text('database_url'),
 });
 
 // ─── Provisioning activity log ────────────────────────────────────────────

@@ -14,6 +14,9 @@ interface OnboardBody {
   customSymbols?: string[];
   riskTolerance: 'conservative' | 'moderate' | 'aggressive';
   agencyMode: 'rules' | 'hybrid' | 'ai';
+  // Optional bring-your-own credentials. Blank = we provide them.
+  anthropicApiKey?: string;
+  databaseUrl?: string;
 }
 
 const PAPER_URL = 'https://paper-api.alpaca.markets';
@@ -52,12 +55,14 @@ export async function POST(
 
   const baseUrl = body.useLive ? LIVE_URL : PAPER_URL;
 
+  const byoDatabase = body.databaseUrl?.trim() || null;
   await upsertTenantSecrets(tenant.id, {
     alpacaApiKey: body.alpacaApiKey,
     alpacaApiSecret: body.alpacaApiSecret,
     alpacaBaseUrl: baseUrl,
-    anthropicApiKey: null,
+    anthropicApiKey: body.anthropicApiKey?.trim() || null,
     polygonApiKey: null,
+    databaseUrl: byoDatabase,
   });
 
   await db
@@ -87,6 +92,14 @@ export async function POST(
 function validate(body: OnboardBody, plan: keyof typeof PLANS): string | null {
   if (!body.alpacaApiKey?.trim() || !body.alpacaApiSecret?.trim()) {
     return 'alpaca key and secret required';
+  }
+  const byoDb = body.databaseUrl?.trim();
+  if (byoDb && !/^postgres(ql)?:\/\/.+@.+\/.+/.test(byoDb)) {
+    return 'database URL must be a Postgres connection string (postgresql://user:pass@host/db)';
+  }
+  const byoAnthropic = body.anthropicApiKey?.trim();
+  if (byoAnthropic && !byoAnthropic.startsWith('sk-ant-')) {
+    return 'Anthropic API key should start with "sk-ant-"';
   }
   if (body.useLive && !PLANS[plan].liveTradingAllowed) {
     return `live trading is not available on the ${plan} plan`;

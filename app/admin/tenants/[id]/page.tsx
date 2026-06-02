@@ -126,6 +126,10 @@ export default async function AdminTenantDetailPage({
             }
           />
           <KV
+            k="Database"
+            v={infraRow?.managedDatabase === false ? 'Bring-your-own' : 'Managed'}
+          />
+          <KV
             k="Bot DATABASE_URL"
             v={infraRow?.databaseUrl ? redactUrl(infraRow.databaseUrl) : '—'}
           />
