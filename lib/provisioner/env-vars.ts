@@ -9,10 +9,13 @@ const WATCHLIST_PRESETS: Record<'top8' | 'crypto', string[]> = {
   crypto: ['BTC/USD', 'ETH/USD', 'SOL/USD', 'DOGE/USD', 'AVAX/USD'],
 };
 
+// The bot reads RISK_PCT as a decimal fraction of the portfolio per trade
+// (parseFloat(RISK_PCT), used as `capital * riskPct`). Send fractions, not
+// whole percents — e.g. 0.04 for 4%, otherwise the bot risks 400% per trade.
 const RISK_PCT: Record<'conservative' | 'moderate' | 'aggressive', number> = {
-  conservative: 1,
-  moderate: 2,
-  aggressive: 4,
+  conservative: 0.01, // 1%
+  moderate: 0.02, // 2%
+  aggressive: 0.04, // 4%
 };
 
 /**
@@ -41,7 +44,7 @@ export function buildBotEnvVars({
       : WATCHLIST_PRESETS.top8;
 
   const useAgency = tenant.agencyMode === 'ai' ? 'true' : 'false';
-  const riskPct = tenant.riskTolerance ? RISK_PCT[tenant.riskTolerance] : 2;
+  const riskPct = tenant.riskTolerance ? RISK_PCT[tenant.riskTolerance] : 0.02;
 
   return {
     NODE_ENV: 'production',

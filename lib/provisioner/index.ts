@@ -7,14 +7,16 @@ import { buildBotEnvVars, generateBotApiKey } from './env-vars';
 import {
   createSupabaseProject,
   parseProjectRef,
+  waitForDatabaseConnectable,
   waitForProjectReady,
 } from './supabase';
 import {
   addCustomDomain,
   createBotService,
   getLatestDeploymentStatus,
+  getOrCreateServiceDomain,
 } from './railway';
-import { addCNAME } from './cloudflare';
+import { addCNAME, addTXT } from './cloudflare';
 import { clearProvisionEvents, emitProvisionEvent } from './events';
 
 const BOT_IMAGE =
@@ -80,15 +82,26 @@ export async function provisionTenant(tenantId: string): Promise<void> {
         botApiKey: generateBotApiKey(),
       })
       .returning();
-  } else if (!infra.subdomain || !infra.botApiKey) {
-    // The row may have been pre-created by the provisioning worker purely to
-    // hold its claim lock (subdomain/botApiKey null). Backfill the identity
-    // fields before any stage relies on them. Only fill what's missing so a
-    // re-run never rotates an already-issued bot API key.
+  } else if (
+    !infra.subdomain ||
+    !infra.botApiKey ||
+    !infra.subdomain.endsWith(`.${baseDomain}`)
+  ) {
+    // Backfill/repair the identity fields:
+    //  - subdomain/botApiKey may be null if the worker pre-created the row to
+    //    hold its claim lock;
+    //  - the subdomain is re-derived if it doesn't match the current
+    //    BASE_DOMAIN (e.g. the base domain was changed after the row was
+    //    seeded), so a stale domain can't persist into DNS.
+    // botApiKey is only ever filled when missing, never rotated.
+    const subdomainOk =
+      infra.subdomain && infra.subdomain.endsWith(`.${baseDomain}`);
     [infra] = await db
       .update(tenantInfra)
       .set({
-        subdomain: infra.subdomain ?? `${tenant.slug}.${baseDomain}`,
+        subdomain: subdomainOk
+          ? infra.subdomain!
+          : `${tenant.slug}.${baseDomain}`,
         botApiKey: infra.botApiKey ?? generateBotApiKey(),
       })
       .where(eq(tenantInfra.tenantId, tenantId))
@@ -134,9 +147,7 @@ export async function provisionTenant(tenantId: string): Promise<void> {
         onStatus: (s) =>
           emitProvisionEvent(tenantId, 'info', `Database status: ${s}`),
       });
-      if (ready) {
-        await emitProvisionEvent(tenantId, 'success', 'Database is ready.');
-      } else {
+      if (!ready) {
         await emitProvisionEvent(
           tenantId,
           'warn',
@@ -144,6 +155,33 @@ export async function provisionTenant(tenantId: string): Promise<void> {
         );
         throw new Error(
           `tenant ${tenant.slug}: database not ready yet; provisioning will resume`
+        );
+      }
+      await emitProvisionEvent(tenantId, 'success', 'Database is healthy.');
+
+      // ACTIVE_HEALTHY is not enough: the connection pooler registers the new
+      // project a little later. Wait until it actually accepts a connection —
+      // otherwise the bot crashes on boot with "tenant/user ... not found".
+      await emitProvisionEvent(
+        tenantId,
+        'info',
+        'Verifying the database accepts connections…'
+      );
+      const connectable = await waitForDatabaseConnectable(infra.databaseUrl!);
+      if (connectable) {
+        await emitProvisionEvent(
+          tenantId,
+          'success',
+          'Database is accepting connections.'
+        );
+      } else {
+        await emitProvisionEvent(
+          tenantId,
+          'warn',
+          'Database not accepting connections yet — will resume provisioning shortly.'
+        );
+        throw new Error(
+          `tenant ${tenant.slug}: database pooler not ready yet; provisioning will resume`
         );
       }
     }
@@ -185,59 +223,75 @@ export async function provisionTenant(tenantId: string): Promise<void> {
     await emitProvisionEvent(tenantId, 'info', 'Bot service already exists — skipping.');
   }
 
-  // Stage 3: custom domain on Railway + Cloudflare CNAME.
+  // Stage 3: networking. Create a Railway service domain (works on every plan)
+  // to health-check against, then best-effort attach the friendly custom
+  // subdomain — its TLS cert provisions asynchronously, so we don't block on it.
+  let healthHost = infra.subdomain!; // fallback if the service domain step fails
   if (infra.railwayServiceId && infra.railwayEnvId) {
-    await emitProvisionEvent(
-      tenantId,
-      'info',
-      `Configuring subdomain ${infra.subdomain}…`
-    );
-    const { defaultDomain } = await addCustomDomain({
-      serviceId: infra.railwayServiceId,
-      environmentId: infra.railwayEnvId,
-      domain: infra.subdomain!,
-    }).catch(async (err) => {
-      // If the domain already exists on the service, Railway errors —
-      // treat that as success and fall back to the convention.
+    const projectId = process.env.RAILWAY_PROJECT_ID;
+    if (!projectId) throw new Error('RAILWAY_PROJECT_ID is not set');
+
+    await emitProvisionEvent(tenantId, 'info', 'Setting up bot networking…');
+    try {
+      healthHost = await getOrCreateServiceDomain({
+        projectId,
+        serviceId: infra.railwayServiceId,
+        environmentId: infra.railwayEnvId,
+      });
+      await emitProvisionEvent(tenantId, 'success', `Bot URL: ${healthHost}`);
+    } catch (err) {
       await emitProvisionEvent(
         tenantId,
         'warn',
-        `Railway custom domain step: ${(err as Error).message} — using default domain.`
+        `Service domain step: ${(err as Error).message}`
       );
-      return { defaultDomain: `bot-${tenant.slug}.up.railway.app` };
-    });
+    }
 
-    await addCNAME({
-      name: tenant.slug,
-      target: defaultDomain,
-    })
-      .then(() =>
-        emitProvisionEvent(
-          tenantId,
-          'success',
-          `DNS record created: ${infra.subdomain} → ${defaultDomain}`
-        )
-      )
-      .catch((err) =>
-        // If the DNS record already exists, continue — we're idempotent.
-        emitProvisionEvent(
-          tenantId,
-          'warn',
-          `DNS step: ${(err as Error).message}`
-        )
+    // Friendly custom subdomain ({slug}.BASE_DOMAIN): register on Railway, then
+    // create the CNAME (DNS-only) + ownership TXT in Cloudflare. Best-effort —
+    // if the plan or DNS isn't ready, the bot still works on its Railway URL.
+    await emitProvisionEvent(tenantId, 'info', `Attaching ${infra.subdomain}…`);
+    try {
+      const cd = await addCustomDomain({
+        projectId,
+        serviceId: infra.railwayServiceId,
+        environmentId: infra.railwayEnvId,
+        domain: infra.subdomain!,
+      });
+      await addCNAME({ name: tenant.slug, target: cd.cnameTarget });
+      if (cd.verificationHost && cd.verificationToken) {
+        await addTXT({
+          name: cd.verificationHost,
+          content: cd.verificationToken,
+        });
+      }
+      await emitProvisionEvent(
+        tenantId,
+        'success',
+        `${infra.subdomain} attached — TLS cert provisioning (live in a few minutes).`
       );
+    } catch (err) {
+      await emitProvisionEvent(
+        tenantId,
+        'warn',
+        `Custom domain skipped: ${(err as Error).message}. Bot reachable at ${healthHost}.`
+      );
+    }
   }
 
-  // Stage 4: wait for the bot to come online (and surface deploy failures).
+  // Stage 4: wait for the bot to come online. Health-check the Railway domain
+  // (reachable immediately — the custom domain's cert is still provisioning),
+  // sending the bot API key so authenticated endpoints work too.
   await emitProvisionEvent(
     tenantId,
     'info',
     'Waiting for the bot to deploy and pass its health check…'
   );
-  const healthUrl = `https://${infra.subdomain}/api/health`;
+  const healthUrl = `https://${healthHost}/api/health`;
   const healthy = await pollHealthy({
     url: healthUrl,
     tenantId,
+    apiKey: infra.botApiKey ?? undefined,
     serviceId: infra.railwayServiceId ?? undefined,
     environmentId: infra.railwayEnvId ?? undefined,
   });
@@ -262,7 +316,7 @@ export async function provisionTenant(tenantId: string): Promise<void> {
     await emitProvisionEvent(
       tenantId,
       'success',
-      `Bot is live at https://${infra.subdomain} ✅`
+      `Bot is live ✅ at https://${healthHost} (also https://${infra.subdomain} once its cert finishes).`
     );
   } else {
     await emitProvisionEvent(
@@ -281,10 +335,11 @@ export async function provisionTenant(tenantId: string): Promise<void> {
 async function pollHealthy(opts: {
   url: string;
   tenantId: string;
+  apiKey?: string;
   serviceId?: string;
   environmentId?: string;
 }): Promise<boolean> {
-  const { url, tenantId, serviceId, environmentId } = opts;
+  const { url, tenantId, apiKey, serviceId, environmentId } = opts;
   let lastDeployStatus: string | null = null;
 
   for (let attempt = 0; attempt < HEALTH_POLL_MAX; attempt++) {
@@ -312,7 +367,10 @@ async function pollHealthy(opts: {
     }
 
     try {
-      const res = await fetch(url, { cache: 'no-store' });
+      const res = await fetch(url, {
+        cache: 'no-store',
+        headers: apiKey ? { 'x-api-key': apiKey } : {},
+      });
       if (res.ok) return true;
     } catch {
       // still booting — fall through to wait
