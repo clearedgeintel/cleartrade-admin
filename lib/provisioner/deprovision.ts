@@ -38,9 +38,10 @@ export async function deprovisionTenant(tenantId: string): Promise<void> {
     }
   }
 
-  // Supabase — delete the tenant's dedicated project. Pulls the ref out
-  // of the stored databaseUrl.
-  if (infra?.databaseUrl) {
+  // Supabase — delete the tenant's dedicated project. Only ours: a
+  // bring-your-own database (managedDatabase = false) is the customer's and is
+  // never touched.
+  if (infra?.databaseUrl && infra.managedDatabase) {
     const ref = parseProjectRef(infra.databaseUrl);
     if (ref) {
       try {

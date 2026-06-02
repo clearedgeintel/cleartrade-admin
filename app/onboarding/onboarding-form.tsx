@@ -29,6 +29,9 @@ export function OnboardingForm({
   const [agencyMode, setAgencyMode] = useState<AgencyMode>(
     plan === 'starter' ? 'hybrid' : 'ai'
   );
+  const [anthropicApiKey, setAnthropicApiKey] = useState('');
+  const [databaseUrl, setDatabaseUrl] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -57,6 +60,8 @@ export function OnboardingForm({
           customSymbols: watchlistPreset === 'custom' ? customSymbols : undefined,
           riskTolerance,
           agencyMode,
+          anthropicApiKey: anthropicApiKey.trim() || undefined,
+          databaseUrl: databaseUrl.trim() || undefined,
         }),
       });
       if (!res.ok) {
@@ -210,8 +215,55 @@ export function OnboardingForm({
         />
       </Section>
 
+      <div className="space-y-3">
+        <button
+          type="button"
+          onClick={() => setShowAdvanced((v) => !v)}
+          className="text-sm font-medium text-primary hover:underline"
+        >
+          {showAdvanced ? '−' : '+'} Bring your own keys (optional)
+        </button>
+        {showAdvanced && (
+          <div className="space-y-4 rounded-lg border border-border bg-surface/60 p-4">
+            <p className="text-xs text-muted-foreground">
+              Leave these blank and we provide them. Bring your own for full
+              control over your LLM spend and your data.
+            </p>
+            <Field label="Anthropic API key">
+              <input
+                type="password"
+                autoComplete="off"
+                value={anthropicApiKey}
+                onChange={(e) => setAnthropicApiKey(e.target.value)}
+                placeholder="sk-ant-…"
+                className="w-full rounded-md border border-border bg-transparent px-3 py-2 font-mono text-sm"
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Blank uses our shared LLM key (subject to your plan&apos;s daily
+                cap).
+              </p>
+            </Field>
+            <Field label="Your database URL">
+              <input
+                type="password"
+                autoComplete="off"
+                value={databaseUrl}
+                onChange={(e) => setDatabaseUrl(e.target.value)}
+                placeholder="postgresql://user:pass@host:5432/postgres"
+                className="w-full rounded-md border border-border bg-transparent px-3 py-2 font-mono text-sm"
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Blank provisions an isolated database for you. Bring your own
+                Postgres (e.g. a Supabase pooler URL) — it must be reachable
+                from the internet, and we never delete it.
+              </p>
+            </Field>
+          </div>
+        )}
+      </div>
+
       {error && (
-        <div className="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-600">
+        <div className="rounded-md border border-loss/30 bg-loss/10 px-4 py-2 text-sm text-loss">
           {error}
         </div>
       )}
