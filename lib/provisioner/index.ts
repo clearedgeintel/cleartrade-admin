@@ -18,9 +18,8 @@ import {
 } from './railway';
 import { addCNAME, addTXT } from './cloudflare';
 import { clearProvisionEvents, emitProvisionEvent } from './events';
+import { resolveLatestImage } from '@/lib/releases';
 
-const BOT_IMAGE =
-  process.env.BOT_DOCKER_IMAGE ?? 'ghcr.io/clearedgeintel/alpaca-trader:latest';
 const HEALTH_POLL_MS = 5_000;
 const HEALTH_POLL_MAX = 24; // 24 * 5s = 2 min
 
@@ -200,9 +199,12 @@ export async function provisionTenant(tenantId: string): Promise<void> {
       databaseUrl: infra.databaseUrl!,
       apiKey: infra.botApiKey!,
     });
+    // Pin to the exact commit `:latest` currently points at, so the bot records
+    // its precise version from day one (falls back to `:latest` if unresolved).
+    const image = await resolveLatestImage();
     const { serviceId, environmentId } = await createBotService({
       tenantSlug: tenant.slug,
-      image: BOT_IMAGE,
+      image,
       envVars,
     });
     [infra] = await db
@@ -210,7 +212,7 @@ export async function provisionTenant(tenantId: string): Promise<void> {
       .set({
         railwayServiceId: serviceId,
         railwayEnvId: environmentId,
-        version: BOT_IMAGE,
+        version: image,
       })
       .where(eq(tenantInfra.tenantId, tenantId))
       .returning();

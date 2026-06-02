@@ -378,6 +378,60 @@ export async function getLatestDeploymentStatus(input: {
   return data.deployments.edges[0]?.node.status ?? null;
 }
 
+/**
+ * Triggers a fresh deployment of the service's current source image. For a
+ * service whose source is a moving tag (`:latest`), this re-pulls and ships the
+ * newest build — the simplest "update to latest".
+ */
+export async function redeployService(input: {
+  serviceId: string;
+  environmentId: string;
+}): Promise<void> {
+  await graphql(
+    `
+      mutation Redeploy($serviceId: String!, $environmentId: String!) {
+        serviceInstanceRedeploy(
+          serviceId: $serviceId
+          environmentId: $environmentId
+        )
+      }
+    `,
+    { serviceId: input.serviceId, environmentId: input.environmentId }
+  );
+}
+
+/**
+ * Repoints the service at a specific image (e.g. an immutable `:sha-…` tag for
+ * a pinned, reversible rollout) and deploys it.
+ */
+export async function setServiceImage(input: {
+  serviceId: string;
+  environmentId: string;
+  image: string;
+}): Promise<void> {
+  await graphql(
+    `
+      mutation SetImage(
+        $serviceId: String!
+        $environmentId: String!
+        $input: ServiceInstanceUpdateInput!
+      ) {
+        serviceInstanceUpdate(
+          serviceId: $serviceId
+          environmentId: $environmentId
+          input: $input
+        )
+      }
+    `,
+    {
+      serviceId: input.serviceId,
+      environmentId: input.environmentId,
+      input: { source: { image: input.image } },
+    }
+  );
+  await redeployService(input);
+}
+
 export async function deleteService(serviceId: string): Promise<void> {
   await graphql(
     `
