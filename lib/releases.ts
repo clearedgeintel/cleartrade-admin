@@ -105,6 +105,20 @@ export async function listReleases(): Promise<Release[]> {
   return releases;
 }
 
+/**
+ * Resolves the moving `:latest` tag to the immutable `:sha-…` ref it currently
+ * points at, so a freshly provisioned bot is pinned to an exact commit. Falls
+ * back to `:latest` if the registry can't be read.
+ */
+export async function resolveLatestImage(): Promise<string> {
+  try {
+    const releases = await listReleases();
+    return releases.find((r) => r.isLatest)?.image ?? latestImageRef();
+  } catch {
+    return latestImageRef();
+  }
+}
+
 /** Short, human label for an image ref stored on a tenant. */
 export function imageLabel(image: string | null | undefined): string {
   if (!image) return 'unknown';
